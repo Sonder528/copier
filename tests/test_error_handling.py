@@ -4,6 +4,7 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
+from plumbum import local
 
 import copier
 from copier._cli import CopierApp
@@ -16,7 +17,7 @@ from copier.errors import (
     TemplateRenderError,
 )
 
-from .helpers import build_file_tree
+from .helpers import build_file_tree, git_save
 
 
 class TestConfigFileErrors:
@@ -241,31 +242,36 @@ class TestMissingFieldErrors:
         src = tmp_path_factory.mktemp("src")
         dst = tmp_path_factory.mktemp("dst")
 
-        build_file_tree(
-            {
-                (src / "copier.yml"): (
-                    """\
-                    old_field:
-                        type: str
-                        default: old_value
-                    """
-                ),
-                (src / "{{ _copier_conf.answers_file }}.jinja"): (
-                    "{{ _copier_answers|to_nice_yaml }}"
-                ),
-            }
-        )
+        with local.cwd(src):
+            build_file_tree(
+                {
+                    "copier.yml": (
+                        """\
+                        old_field:
+                            type: str
+                            default: old_value
+                        """
+                    ),
+                    "{{ _copier_conf.answers_file }}.jinja": (
+                        "{{ _copier_answers|to_nice_yaml }}"
+                    ),
+                }
+            )
+            git_save()
 
         copier.run_copy(str(src), dst, defaults=True, overwrite=True)
+        git_save(dst)
 
-        new_config = """\
+        with local.cwd(src):
+            new_config = """\
 old_field:
     type: str
     default: old_value
 new_required_field:
     type: str
 """
-        (src / "copier.yml").write_text(dedent(new_config))
+            Path("copier.yml").write_text(dedent(new_config))
+            git_save()
 
         with pytest.raises(MissingFieldError) as exc_info:
             copier.run_recopy(dst, defaults=True, overwrite=True)
