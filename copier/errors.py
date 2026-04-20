@@ -48,6 +48,10 @@ __all__ = [
     "MissingSettingsWarning",
     "MissingFileWarning",
     "InteractiveSessionError",
+    "TemplateRenderError",
+    "MissingFieldError",
+    "InvalidTemplateVariableError",
+    "AnswersFileError",
 ]
 
 
@@ -240,3 +244,104 @@ class InteractiveSessionError(UserMessageError):
 
 class SettingsError(CopierError):
     """Exception raised when the settings are invalid."""
+
+
+class AnswersFileError(UserMessageError):
+    """Base exception for answers file related errors."""
+
+
+class MissingFieldError(AnswersFileError):
+    """Exception raised when a required field is missing from the answers file.
+
+    Attributes:
+        field_name: The name of the missing field.
+        template_path: Path to the template that defines the field.
+        answers_file_path: Path to the answers file that is missing the field.
+    """
+
+    def __init__(
+        self,
+        field_name: str,
+        template_path: str | None = None,
+        answers_file_path: str | None = None,
+    ):
+        self.field_name = field_name
+        self.template_path = template_path
+        self.answers_file_path = answers_file_path
+
+        message_parts = [f"Missing required field: '{field_name}'"]
+        if template_path:
+            message_parts.append(f"  Defined in template: {template_path}")
+        if answers_file_path:
+            message_parts.append(f"  Missing from answers file: {answers_file_path}")
+        message_parts.append("\nThis field is required by the template but was not found in your answers file.")
+        message_parts.append("Please provide a value for this field or check your answers file.")
+
+        super().__init__("\n".join(message_parts))
+
+
+class InvalidTemplateVariableError(UserMessageError):
+    """Exception raised when an invalid template variable is used.
+
+    Attributes:
+        variable_name: The name of the invalid/undefined variable.
+        template_file: Path to the template file containing the invalid variable.
+        line_number: Line number where the variable was used (if available).
+        context: Additional context about the error.
+    """
+
+    def __init__(
+        self,
+        variable_name: str,
+        template_file: str | None = None,
+        line_number: int | None = None,
+        context: str | None = None,
+    ):
+        self.variable_name = variable_name
+        self.template_file = template_file
+        self.line_number = line_number
+        self.context = context
+
+        message_parts = [f"Undefined template variable: '{variable_name}'"]
+        if template_file:
+            file_info = f"  In file: {template_file}"
+            if line_number:
+                file_info += f" (line {line_number})"
+            message_parts.append(file_info)
+        if context:
+            message_parts.append(f"  Context: {context}")
+        message_parts.append("\nThis variable is not defined in the template context.")
+        message_parts.append("Please check your template for typos or ensure the variable is properly defined.")
+
+        super().__init__("\n".join(message_parts))
+
+
+class TemplateRenderError(UserMessageError):
+    """Exception raised when template rendering fails.
+
+    Attributes:
+        template_file: Path to the template file that failed to render.
+        original_error: The original exception that caused the failure.
+        context: Additional context about where the error occurred.
+    """
+
+    def __init__(
+        self,
+        template_file: str | None = None,
+        original_error: Exception | None = None,
+        context: str | None = None,
+    ):
+        self.template_file = template_file
+        self.original_error = original_error
+        self.context = context
+
+        message_parts = ["Template rendering failed"]
+        if template_file:
+            message_parts.append(f"  File: {template_file}")
+        if context:
+            message_parts.append(f"  Context: {context}")
+        if original_error:
+            message_parts.append(f"\nOriginal error: {original_error}")
+        message_parts.append("\nPlease check your template syntax and variables.")
+
+        super().__init__("\n".join(message_parts))
