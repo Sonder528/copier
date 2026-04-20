@@ -79,7 +79,7 @@ description: A test project
 
     def test_config_file_error_is_user_message_error(self) -> None:
         """Test that ConfigFileError is a UserMessageError for CLI handling."""
-        from copier.errors import ConfigFileError, UserMessageError, ValueError
+        from copier.errors import ConfigFileError, UserMessageError
 
         assert issubclass(ConfigFileError, UserMessageError)
         assert issubclass(ConfigFileError, ValueError)
@@ -233,9 +233,47 @@ class TestMissingFieldErrors:
     def test_missing_field_in_update(
         self, tmp_path_factory: pytest.TempPathFactory
     ) -> None:
-        """Test that missing fields during update provide detailed error messages."""
-        pass
+        """Test that missing fields during update provide detailed error messages.
 
+        This test simulates an update scenario where a new required field is added
+        to the template, but the existing answers file does not have a value for it.
+        """
+        src = tmp_path_factory.mktemp("src")
+        dst = tmp_path_factory.mktemp("dst")
+
+        build_file_tree(
+            {
+                (src / "copier.yml"): (
+                    """\
+                    old_field:
+                        type: str
+                        default: old_value
+                    """
+                ),
+                (src / "{{ _copier_conf.answers_file }}.jinja"): (
+                    "{{ _copier_answers|to_nice_yaml }}"
+                ),
+            }
+        )
+
+        copier.run_copy(str(src), dst, defaults=True, overwrite=True)
+
+        new_config = """\
+old_field:
+    type: str
+    default: old_value
+new_required_field:
+    type: str
+"""
+        (src / "copier.yml").write_text(dedent(new_config))
+
+        with pytest.raises(MissingFieldError) as exc_info:
+            copier.run_recopy(dst, defaults=True, overwrite=True)
+
+        error = exc_info.value
+        assert error.field_name == "new_required_field"
+        assert "new_required_field" in str(error)
+        assert "Missing required field" in str(error)
 
 class TestExitStatus:
     """Test cases for command exit status."""
