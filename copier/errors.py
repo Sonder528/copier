@@ -74,26 +74,93 @@ class UnsupportedVersionError(UserMessageError):
     """Copier version does not support template version."""
 
 
-class ConfigFileError(ValueError, CopierError):
-    """Parent class defining problems with the config file."""
+class ConfigFileError(UserMessageError, ValueError):
+    """Parent class defining problems with the config file.
+
+    This error inherits from UserMessageError so it can be properly
+    caught and displayed by the CLI error handler.
+    It also inherits from ValueError for backward compatibility.
+    """
 
 
 class InvalidConfigFileError(ConfigFileError):
-    """Indicates that the config file is wrong."""
+    """Indicates that the config file is wrong.
 
-    def __init__(self, conf_path: Path, quiet: bool):
-        msg = str(conf_path)
-        printf_exception(self, "INVALID CONFIG FILE", msg=msg, quiet=quiet)
-        super().__init__(msg)
+    Attributes:
+        conf_path: Path to the invalid config file.
+        original_error: The original exception that caused this error.
+        line_number: Line number where the error occurred (if available).
+        column_number: Column number where the error occurred (if available).
+        problem: Description of the problem (if available).
+    """
+
+    def __init__(
+        self,
+        conf_path: Path,
+        original_error: Exception | None = None,
+        quiet: bool = False,
+    ):
+        self.conf_path = conf_path
+        self.original_error = original_error
+        self.line_number: int | None = None
+        self.column_number: int | None = None
+        self.problem: str | None = None
+        self.context: str | None = None
+
+        message_parts = [f"ERROR: Invalid config file: {conf_path}"]
+
+        if original_error:
+            if hasattr(original_error, "problem") and original_error.problem:
+                self.problem = str(original_error.problem)
+
+            if hasattr(original_error, "problem_mark") and original_error.problem_mark:
+                mark = original_error.problem_mark
+                self.line_number = mark.line + 1
+                self.column_number = mark.column + 1
+                message_parts.append(
+                    f"  at line {self.line_number}, column {self.column_number}"
+                )
+
+            if self.problem:
+                message_parts.append(f"  Problem: {self.problem}")
+
+            if hasattr(original_error, "context") and original_error.context:
+                self.context = str(original_error.context)
+                message_parts.append(f"  Context: {self.context}")
+
+            if not self.problem and not self.line_number:
+                message_parts.append(f"  Error: {original_error}")
+        else:
+            message_parts.append("  The configuration file contains syntax errors.")
+
+        message_parts.append("")
+        message_parts.append("Hint: Please check your YAML syntax.")
+        message_parts.append("  Common issues include:")
+        message_parts.append("  - Missing colons after key names")
+        message_parts.append("  - Incorrect indentation")
+        message_parts.append("  - Unclosed quotes or brackets")
+
+        super().__init__("\n".join(message_parts))
 
 
 class MultipleConfigFilesError(ConfigFileError):
-    """Both copier.yml and copier.yaml found, and that's an error."""
+    """Both copier.yml and copier.yaml found, and that's an error.
+
+    Attributes:
+        conf_paths: List of paths to the conflicting config files.
+    """
 
     def __init__(self, conf_paths: PathSeq):
-        msg = str(conf_paths)
-        printf_exception(self, "MULTIPLE CONFIG FILES", msg=msg)
-        super().__init__(msg)
+        self.conf_paths = conf_paths
+
+        message_parts = [
+            f"ERROR: Multiple config files found: {conf_paths}",
+            "",
+            "Hint: Please remove all but one of them.",
+            f"  Copier supports either 'copier.yml' or 'copier.yaml', not both.",
+        ]
+
+        super().__init__("\n".join(message_parts))
 
 
 class InvalidTypeError(TypeError, CopierError):

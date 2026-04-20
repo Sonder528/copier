@@ -102,7 +102,7 @@ def load_template_config(conf_path: Path, quiet: bool = False) -> AnyByStrDict:
         try:
             flattened_result = lflatten(filter(None, yaml.load_all(f, Loader=_Loader)))
         except yaml.parser.ParserError as e:
-            raise InvalidConfigFileError(conf_path, quiet) from e
+            raise InvalidConfigFileError(conf_path, original_error=e, quiet=quiet) from e
 
     merged_options = defaultdict(list)
     for option in (
