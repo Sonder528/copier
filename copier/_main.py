@@ -30,6 +30,7 @@ from typing import (
 )
 from unicodedata import normalize
 
+from jinja2 import UndefinedError
 from jinja2.loaders import FileSystemLoader
 from jinja2.sandbox import SandboxedEnvironment
 from packaging.version import Version
@@ -73,7 +74,10 @@ from .errors import (
     ExtensionNotFoundError,
     ForbiddenPathError,
     InteractiveSessionError,
+    InvalidTemplateVariableError,
+    MissingFieldError,
     TaskError,
+    TemplateRenderError,
     UnsafeTemplateError,
     UserMessageError,
     YieldTagInFileError,
@@ -86,6 +90,69 @@ _operation: ContextVar[Operation] = ContextVar("_operation")
 _pathspec_pattern: Final = (
     "gitignore" if Version(pathspec_version) >= Version("1.0.0") else "gitwildmatch"
 )
+
+
+def _extract_undefined_variable(error_message: str) -> str | None:
+    """Extract the undefined variable name from a Jinja2 UndefinedError message.
+
+    Jinja2 UndefinedError messages typically look like:
+    - "'variable_name' is undefined"
+    - "'dict_object' has no attribute 'nonexistent_key'"
+    - "'object' has no element 'nonexistent_key'"
+    """
+    import re
+
+    patterns = [
+        r"'([^']+)' is undefined",
+        r"'([^']+)' has no attribute '([^']+)'",
+        r"'([^']+)' has no element '([^']+)'",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, error_message)
+        if match:
+            groups = match.groups()
+            if len(groups) == 1:
+                return groups[0]
+            elif len(groups) == 2:
+                return f"{groups[0]}.{groups[1]}"
+
+    return None
+
+
+def _handle_render_error(
+    error: Exception,
+    template_file: str | None = None,
+    context: str | None = None,
+) -> Exception:
+    """Handle a template render error and convert it to a more informative error.
+
+    Args:
+        error: The original exception.
+        template_file: The template file being rendered.
+        context: Additional context about the error.
+
+    Returns:
+        A more informative exception.
+    """
+    if isinstance(error, UndefinedError):
+        variable_name = _extract_undefined_variable(str(error))
+        if variable_name:
+            return InvalidTemplateVariableError(
+                variable_name=variable_name,
+                template_file=template_file,
+                context=context,
+            )
+        return TemplateRenderError(
+            template_file=template_file,
+            original_error=error,
+            context=context,
+        )
+    return TemplateRenderError(
+        template_file=template_file,
+        original_error=error,
+        context=context,
+    )
 
 
 def as_operation(value: Operation) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
@@ -619,7 +686,11 @@ class Worker:
                 if self.defaults:
                     new_answer = question.get_default()
                     if new_answer is MISSING:
-                        raise ValueError(f'Question "{var_name}" is required')
+                        raise MissingFieldError(
+                            field_name=var_name,
+                            template_path=str(self.template.local_abspath),
+                            answers_file_path=str(self.subproject.answers_relpath),
+                        )
                 else:
                     try:
                         new_answer = unsafe_prompt(
@@ -810,14 +881,19 @@ class Worker:
                 tpl = self.jinja_env.get_template(src_relpath.as_posix())
             except UnicodeDecodeError:
                 if self.template.templates_suffix:
-                    # suffix is not empty, re-raise
                     raise
-                # suffix is empty, fallback to copy
                 new_content = src_abspath.read_bytes()
             else:
-                new_content = tpl.render(
-                    **self._render_context(), **(extra_context or {})
-                ).encode()
+                try:
+                    new_content = tpl.render(
+                        **self._render_context(), **(extra_context or {})
+                    ).encode()
+                except Exception as error:
+                    raise _handle_render_error(
+                        error,
+                        template_file=str(src_relpath),
+                        context=f"Rendering template file: {src_relpath}",
+                    ) from error
                 if get_yield_context(self.jinja_env).yield_name:
                     raise YieldTagInFileError(
                         f"File {src_relpath} contains a yield tag, but it is not allowed."
@@ -1014,8 +1090,15 @@ class Worker:
             extra_context:
                 Additional variables to use for rendering the template.
         """
-        tpl = self.jinja_env.from_string(string)
-        return tpl.render(**self._render_context(), **(extra_context or {}))
+        try:
+            tpl = self.jinja_env.from_string(string)
+            return tpl.render(**self._render_context(), **(extra_context or {}))
+        except Exception as error:
+            raise _handle_render_error(
+                error,
+                template_file=None,
+                context=f"Rendering templated string: {string[:100]}{'...' if len(string) > 100 else ''}",
+            ) from error
 
     def _render_value(
         self, value: _T, extra_context: AnyByStrDict | None = None

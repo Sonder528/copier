@@ -25,8 +25,8 @@ from pydantic_core.core_schema import ValidationInfo
 from pygments.lexers.data import JsonLexer, YamlLexer
 from questionary.prompts.common import Choice
 
-from copier._jinja_ext import UnsetError
-from copier._settings import SettingsModel
+from ._jinja_ext import UnsetError
+from ._settings import SettingsModel
 
 from ._tools import cast_to_bool, cast_to_str, force_str_end
 from ._types import (
@@ -37,7 +37,7 @@ from ._types import (
     MissingType,
     StrOrPath,
 )
-from .errors import InvalidTypeError, MissingFileWarning, UserMessageError
+from .errors import InvalidTemplateVariableError, InvalidTypeError, MissingFileWarning, UserMessageError
 
 
 # TODO Remove these two functions as well as DEFAULT_DATA in a future release
@@ -484,7 +484,6 @@ class Question:
         try:
             template = self.jinja_env.from_string(value)
         except TypeError:
-            # value was not a string
             return (
                 [self.render_value(item) for item in value]
                 if isinstance(value, list)
@@ -495,6 +494,12 @@ class Question:
         except UnsetError:
             raise
         except UndefinedError as error:
+            variable_name = _extract_undefined_variable(str(error))
+            if variable_name:
+                raise InvalidTemplateVariableError(
+                    variable_name=variable_name,
+                    context=f"While rendering templated value: {value[:100]}{'...' if len(value) > 100 else ''}",
+                ) from error
             raise UserMessageError(str(error)) from error
 
     def parse_answer(self, answer: Any) -> Any:
@@ -529,6 +534,34 @@ class Question:
         raise ValueError(
             f"Invalid choice: {choice_error}" if choice_error else "Invalid choice"
         )
+
+
+def _extract_undefined_variable(error_message: str) -> str | None:
+    """Extract the undefined variable name from a Jinja2 UndefinedError message.
+
+    Jinja2 UndefinedError messages typically look like:
+    - "'variable_name' is undefined"
+    - "'dict_object' has no attribute 'nonexistent_key'"
+    - "'object' has no element 'nonexistent_key'"
+    """
+    import re
+
+    patterns = [
+        r"'([^']+)' is undefined",
+        r"'([^']+)' has no attribute '([^']+)'",
+        r"'([^']+)' has no element '([^']+)'",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, error_message)
+        if match:
+            groups = match.groups()
+            if len(groups) == 1:
+                return groups[0]
+            elif len(groups) == 2:
+                return f"{groups[0]}.{groups[1]}"
+
+    return None
 
 
 def parse_yaml_string(string: str) -> Any:
